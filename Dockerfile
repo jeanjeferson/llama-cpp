@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 # Definir variáveis de ambiente
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Instalar dependências (adicionando libcurl4-openssl-dev)
+# Instalar dependências
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -30,9 +30,9 @@ ENV CMAKE_CXX_COMPILER_LAUNCHER=ccache
 RUN cmake -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DLLAMA_AVX2=ON -DLLAMA_FMA=ON -DLLAMA_F16C=ON
 RUN cmake --build build
 
-# Instalar dependências do servidor
-WORKDIR /app/llama.cpp/server
-RUN pip3 install -r requirements.txt
+# Instalar dependências do servidor manualmente
+# Em vez de usar requirements.txt que pode não existir
+RUN pip3 install flask flask_cors numpy sentencepiece
 
 # Criar diretório para modelos
 WORKDIR /app/llama.cpp
