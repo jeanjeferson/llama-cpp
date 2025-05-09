@@ -3,7 +3,7 @@ FROM ubuntu:22.04
 # Definir variáveis de ambiente
 ENV DEBIAN_FRONTEND=noninteractive
 
-# Instalar dependências
+# Instalar dependências (adicionando libcurl4-openssl-dev)
 RUN apt-get update && apt-get install -y \
     build-essential \
     cmake \
@@ -12,6 +12,7 @@ RUN apt-get update && apt-get install -y \
     python3-pip \
     wget \
     curl \
+    libcurl4-openssl-dev \
     unzip \
     ninja-build \
     ccache \
