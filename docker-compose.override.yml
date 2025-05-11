@@ -1,17 +1,9 @@
 services:
   llama-cpp-server:
-    build:
-      context: .
-      dockerfile: Dockerfile
-    ports:
-      - "8080:8080"
-    volumes:
-      - ./models:/app/models
     environment:
       - LLAMA_CTX_SIZE=4096
       - LLAMA_N_THREADS=18
       - LLAMA_N_BATCH=512
-    restart: unless-stopped
     deploy:
       resources:
         limits:

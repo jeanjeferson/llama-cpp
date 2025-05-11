@@ -2,21 +2,14 @@ version: '3'
 
 services:
   llama-cpp-server:
+    container_name: llama-cpp-server
     build:
       context: .
       dockerfile: Dockerfile
-    container_name: llama-cpp-server
     ports:
       - "8080:8080"
     volumes:
-      - ./models:/app/llama.cpp/models
-    command: [
-      "--ctx-size", "4096",
-      "-t", "18",
-      "--batch-size", "512",
-      "--parallel", "4",
-      "--mlock"
-    ]
+      - ./models:/app/models
     restart: unless-stopped
     # Limites de recursos (opcional - ajuste conforme necessário)
     deploy:
