@@ -12,10 +12,11 @@ CORS(app)
 
 loaded_models = {}
 
+# Configurações via variáveis de ambiente
 DEFAULT_CONFIG = {
-    "n_ctx": 4096,
-    "n_threads": 18,
-    "n_batch": 512
+    "n_ctx": int(os.getenv("LLAMA_CTX_SIZE", "4096")),
+    "n_threads": int(os.getenv("LLAMA_N_THREADS", "18")),
+    "n_batch": int(os.getenv("LLAMA_N_BATCH", "512"))
 }
 
 def get_available_models():
@@ -150,8 +151,10 @@ def completion():
 def health():
     return jsonify({
         "status": "ok",
-        "loaded_models": list(loaded_models.keys())
+        "loaded_models": list(loaded_models.keys()),
+        "config": DEFAULT_CONFIG
     })
 
 if __name__ == "__main__":
+    print(f"Iniciando servidor com configurações: {DEFAULT_CONFIG}")
     app.run(host="0.0.0.0", port=8080, debug=False)
