@@ -1,0 +1,17 @@
+version: '3'
+
+services:
+  llama-cpp-server:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./models:/app/models
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '18'
+          memory: 28G
