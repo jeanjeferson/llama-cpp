@@ -50,6 +50,44 @@ def clean_output(text):
     
     return text.strip()
 
+def get_model_specific_params(model_id):
+    """Retorna parâmetros específicos para cada modelo."""
+    model_id = model_id.lower()
+    
+    # Parâmetros padrão
+    params = {
+        "temperature": 0.7,
+        "max_tokens": 512,
+        "stop": ["</s>"],
+        "repeat_penalty": 1.1,
+        "frequency_penalty": 0.0,
+        "top_p": 0.95
+    }
+    
+    # Tinyllama precisa de ajustes especiais
+    if "tiny" in model_id:
+        params.update({
+            "temperature": 0.5,  # Um pouco mais criativo que antes
+            "max_tokens": 250,   # Aumento para concluir frases
+            "stop": ["<|user|>", "<|assistant|>", "</s>", "<|endoftext|>"],
+            "repeat_penalty": 1.3,  # Aumentar penalidade de repetição
+            "top_p": 0.92,  # Reduzir um pouco a dispersão
+            "mirostat_mode": 1,  # Ativar Mirostat (controle dinâmico)
+            "mirostat_tau": 5.0,  # Valor conservador
+            "mirostat_eta": 0.1   # Valor padrão
+        })
+    # Qwen também precisa de ajustes
+    elif "qwen" in model_id and ("1.5b" in model_id or "1_5" in model_id or "1-5" in model_id):
+        params.update({
+            "temperature": 0.5,
+            "max_tokens": 200,
+            "stop": ["<|im_end|>", "</s>", "<|endoftext|>", "<|im_start|>"],
+            "repeat_penalty": 1.2,
+            "frequency_penalty": 0.01
+        })
+    
+    return params
+
 def get_available_models():
     """Retorna lista de modelos disponíveis."""
     models = []
@@ -171,7 +209,44 @@ def list_models():
         "data": models
     })
 
-# NOVO ENDPOINT: Descarregar modelos (compatível com OpenAI)
+@app.route("/v1/models/load", methods=["POST"])
+def load_model_endpoint():
+    """Carrega um modelo específico na memória (compatível com OpenAI)."""
+    data = request.json
+    model_id = data.get("model", "")
+    
+    # Verificar se o model_id foi fornecido
+    if not model_id:
+        return jsonify({
+            "error": {
+                "message": "model é obrigatório",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "param_required"
+            }
+        }), 400
+    
+    # Tentar carregar o modelo
+    model = load_model(model_id)
+    
+    if model:
+        return jsonify({
+            "id": f"load-{uuid.uuid4()}",
+            "object": "model.load",
+            "created": int(time.time()),
+            "model": model_id,
+            "success": True
+        })
+    else:
+        return jsonify({
+            "error": {
+                "message": f"Não foi possível carregar o modelo '{model_id}'",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "model_not_found"
+            }
+        }), 404
+
 @app.route("/v1/models/unload", methods=["POST"])
 def unload_model_endpoint():
     """Descarrega um modelo específico da memória (compatível com OpenAI)."""
@@ -236,23 +311,26 @@ def chat_completions():
     data = request.json
     model_id = data.get("model", default_model)
     messages = data.get("messages", [])
-    max_tokens = data.get("max_tokens", 512)
-    temperature = data.get("temperature", 0.7)
-    stop = data.get("stop", ["</s>"])
     stream = data.get("stream", False)
+    
+    # Obter parâmetros específicos para o modelo
+    model_params = get_model_specific_params(model_id)
+    
+    # Permitir sobrescrever com parâmetros fornecidos pelo usuário
+    max_tokens = data.get("max_tokens", model_params["max_tokens"])
+    temperature = data.get("temperature", model_params["temperature"])
+    stop = data.get("stop", model_params["stop"])
+    repeat_penalty = data.get("repeat_penalty", model_params.get("repeat_penalty", 1.1))
+    frequency_penalty = data.get("frequency_penalty", model_params.get("frequency_penalty", 0.0))
+    top_p = data.get("top_p", model_params.get("top_p", 0.95))
+    
+    # Parâmetros do mirostat (se aplicável)
+    mirostat_mode = model_params.get("mirostat_mode", 0)  # 0 = desativado
+    mirostat_tau = model_params.get("mirostat_tau", 5.0)
+    mirostat_eta = model_params.get("mirostat_eta", 0.1)
     
     # Identificar o tipo de modelo
     model_type = get_model_type(model_id)
-    
-    # Ajustar parâmetros com base no tipo de modelo
-    if model_type == "qwen" or model_type == "tiny":
-        temperature = data.get("temperature", 0.2)  # Temperatura menor para modelos pequenos
-        max_tokens = min(max_tokens, 150)  # Limitar tokens para evitar loops
-        # Adicionar tokens de parada específicos
-        if model_type == "qwen":
-            stop = list(set(stop + ["<|im_end|>", "</s>", "<|endoftext|>"]))
-        elif model_type == "tiny":
-            stop = list(set(stop + ["<|assistant|>", "</s>", "<|endoftext|>", "<|user|>"]))
     
     # Formatar prompt específico para o modelo
     prompt = format_prompt_for_model(messages, model_type)
@@ -269,7 +347,19 @@ def chat_completions():
     response_id = str(uuid.uuid4())
     
     try:
-        result = llm(prompt, max_tokens=max_tokens, temperature=temperature, stop=stop)
+        # Adicionar suporte a mirostat e outros parâmetros
+        result = llm(
+            prompt, 
+            max_tokens=max_tokens, 
+            temperature=temperature, 
+            stop=stop,
+            repeat_penalty=repeat_penalty,
+            frequency_penalty=frequency_penalty,
+            top_p=top_p,
+            mirostat_mode=mirostat_mode,
+            mirostat_tau=mirostat_tau,
+            mirostat_eta=mirostat_eta
+        )
         
         # Limpar a saída de tags de formatação
         raw_content = result['choices'][0]['text']
