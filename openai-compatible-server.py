@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
 import os
-import gc
+import gc  # Importante para o unload
 import json
 import time
 import uuid
+import re
 from datetime import datetime
 from flask import Flask, request, jsonify
 from flask_cors import CORS
@@ -24,6 +25,30 @@ DEFAULT_CONFIG = {
     "n_threads": 18,
     "n_batch": 512
 }
+
+# Função para limpar tags de formatação da saída
+def clean_output(text):
+    """Remove tags de formatação da saída do modelo."""
+    # Remover tags de formatação comuns
+    patterns = [
+        r'<s>|</s>',                           # Mistral/Llama
+        r'\[INST\]|\[/INST\]',                 # Mistral
+        r'<\|im_start\|>.*?<\|im_end\|>',      # Qwen completo
+        r'<\|im_start\|>|<\|im_end\|>',        # Qwen parcial
+        r'<\|user\|>|<\|assistant\|>|<\|system\|>', # TinyLlama
+        r'<\|.*?\|>',                          # Outras tags
+        r'<<SYS>>.*?<</SYS>>'                  # Outras tags de sistema
+    ]
+    
+    # Aplicar cada padrão para limpar o texto
+    for pattern in patterns:
+        text = re.sub(pattern, '', text)
+    
+    # Remover espaços extras e linhas vazias duplas
+    text = re.sub(r'\n\s*\n', '\n\n', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text.strip()
 
 def get_available_models():
     """Retorna lista de modelos disponíveis."""
@@ -77,8 +102,66 @@ def load_model(model_id):
         print(f"Erro ao carregar modelo {model_id}: {e}")
         return None
 
-# OpenAI Compatible Endpoints
+# NOVA FUNÇÃO: Descarregar modelo da memória
+def unload_model(model_id):
+    """Remove um modelo da memória."""
+    if model_id in loaded_models:
+        print(f"Descarregando modelo: {model_id}")
+        del loaded_models[model_id]
+        gc.collect()  # Forçar coleta de lixo
+        print(f"Modelo {model_id} descarregado com sucesso!")
+        return True
+    else:
+        print(f"Modelo {model_id} não está carregado")
+        return False
 
+# Detectar o tipo de modelo para ajustes específicos
+def get_model_type(model_id):
+    """Identifica o tipo de modelo com base no nome."""
+    model_id = model_id.lower()
+    if "qwen" in model_id:
+        return "qwen"
+    elif "tiny" in model_id:
+        return "tiny"
+    elif "phi" in model_id:
+        return "phi"
+    elif "llama" in model_id:
+        return "llama"
+    elif "mistral" in model_id:
+        return "mistral"
+    elif "gemma" in model_id:
+        return "gemma"
+    elif "deepseek" in model_id:
+        return "deepseek"
+    else:
+        return "default"
+
+# Formatar com base no tipo de modelo
+def format_prompt_for_model(messages, model_type):
+    """Formata o prompt de acordo com o tipo do modelo."""
+    system_msg = next((m.get('content', '') for m in messages if m.get('role') == 'system'), '')
+    user_msgs = [m.get('content', '') for m in messages if m.get('role') == 'user']
+    user_msg = user_msgs[-1] if user_msgs else ''
+    
+    if model_type == "qwen":
+        return f"<|im_start|>system\n{system_msg}<|im_end|>\n<|im_start|>user\n{user_msg}<|im_end|>\n<|im_start|>assistant\n"
+    elif model_type == "tiny":
+        return f"<|user|>\n{user_msg}\n<|assistant|>\n"
+    elif model_type == "phi":
+        return f"<|system|>\n{system_msg}\n<|user|>\n{user_msg}\n<|assistant|>\n"
+    elif model_type == "llama":
+        return f"<|begin_of_text|><|start_header_id|>system<|end_header_id|>\n{system_msg}<|eot_id|><|start_header_id|>user<|end_header_id|>\n{user_msg}<|eot_id|><|start_header_id|>assistant<|end_header_id|>\n"
+    elif model_type == "mistral":
+        return f"<s>[INST] {system_msg}\n\n{user_msg} [/INST]"
+    elif model_type == "gemma":
+        return f"<start_of_turn>system\n{system_msg}<end_of_turn>\n<start_of_turn>user\n{user_msg}<end_of_turn>\n<start_of_turn>model\n"
+    elif model_type == "deepseek":
+        return f"<|im_start|>system\n{system_msg}\n<|im_end|>\n<|im_start|>user\n{user_msg}\n<|im_end|>\n<|im_start|>assistant\n"
+    else:
+        # Formato genérico
+        return f"System: {system_msg}\nUser: {user_msg}\nAssistant:"
+
+# OpenAI Compatible Endpoints
 @app.route("/v1/models", methods=["GET"])
 def list_models():
     """Lista todos os modelos disponíveis (compatível com OpenAI)."""
@@ -86,6 +169,65 @@ def list_models():
     return jsonify({
         "object": "list",
         "data": models
+    })
+
+# NOVO ENDPOINT: Descarregar modelos (compatível com OpenAI)
+@app.route("/v1/models/unload", methods=["POST"])
+def unload_model_endpoint():
+    """Descarrega um modelo específico da memória (compatível com OpenAI)."""
+    data = request.json
+    model_id = data.get("model", "") # Usa o mesmo campo "model" da API OpenAI para consistência
+    
+    # Verificar se o model_id foi fornecido
+    if not model_id:
+        return jsonify({
+            "error": {
+                "message": "model é obrigatório",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "param_required"
+            }
+        }), 400
+    
+    # Tentar descarregar o modelo
+    success = unload_model(model_id)
+    
+    if success:
+        return jsonify({
+            "id": f"unload-{uuid.uuid4()}",
+            "object": "model.unload",
+            "created": int(time.time()),
+            "model": model_id,
+            "success": True
+        })
+    else:
+        return jsonify({
+            "error": {
+                "message": f"Modelo '{model_id}' não está carregado",
+                "type": "invalid_request_error",
+                "param": "model",
+                "code": "model_not_loaded"
+            }
+        }), 404
+
+# Permitir descarregar todos os modelos
+@app.route("/v1/models/unload_all", methods=["POST"])
+def unload_all_models_endpoint():
+    """Descarrega todos os modelos da memória."""
+    models_unloaded = list(loaded_models.keys())
+    count = len(models_unloaded)
+    
+    # Limpar o dicionário de modelos
+    loaded_models.clear()
+    gc.collect()  # Forçar coleta de lixo
+    
+    return jsonify({
+        "id": f"unload-all-{uuid.uuid4()}",
+        "object": "model.unload_all",
+        "created": int(time.time()),
+        "models_unloaded": models_unloaded,
+        "count": count,
+        "success": True
     })
 
 @app.route("/v1/chat/completions", methods=["POST"])
@@ -99,20 +241,21 @@ def chat_completions():
     stop = data.get("stop", ["</s>"])
     stream = data.get("stream", False)
     
-    # Converter mensagens para o formato Mistral
-    prompt_parts = []
-    for msg in messages:
-        role = msg.get("role", "")
-        content = msg.get("content", "")
-        
-        if role == "system":
-            prompt_parts.append(f"<s>[INST] {content} [/INST]")
-        elif role == "user":
-            prompt_parts.append(f"<s>[INST] {content} [/INST]")
-        elif role == "assistant":
-            prompt_parts.append(f"{content}</s>")
+    # Identificar o tipo de modelo
+    model_type = get_model_type(model_id)
     
-    prompt = "\n".join(prompt_parts)
+    # Ajustar parâmetros com base no tipo de modelo
+    if model_type == "qwen" or model_type == "tiny":
+        temperature = data.get("temperature", 0.2)  # Temperatura menor para modelos pequenos
+        max_tokens = min(max_tokens, 150)  # Limitar tokens para evitar loops
+        # Adicionar tokens de parada específicos
+        if model_type == "qwen":
+            stop = list(set(stop + ["<|im_end|>", "</s>", "<|endoftext|>"]))
+        elif model_type == "tiny":
+            stop = list(set(stop + ["<|assistant|>", "</s>", "<|endoftext|>", "<|user|>"]))
+    
+    # Formatar prompt específico para o modelo
+    prompt = format_prompt_for_model(messages, model_type)
     
     # Garantir que o modelo está carregado
     llm = loaded_models.get(model_id)
@@ -127,7 +270,10 @@ def chat_completions():
     
     try:
         result = llm(prompt, max_tokens=max_tokens, temperature=temperature, stop=stop)
-        content = result['choices'][0]['text'].strip()
+        
+        # Limpar a saída de tags de formatação
+        raw_content = result['choices'][0]['text']
+        content = clean_output(raw_content)
         
         elapsed_time = time.time() - start_time
         
@@ -169,6 +315,12 @@ def completions():
     temperature = data.get("temperature", 0.7)
     stop = data.get("stop", ["</s>"])
     
+    # Identificar o tipo de modelo e ajustar parâmetros
+    model_type = get_model_type(model_id)
+    if model_type in ["qwen", "tiny"]:
+        temperature = min(temperature, 0.3)
+        max_tokens = min(max_tokens, 200)
+    
     # Garantir que o modelo está carregado
     llm = loaded_models.get(model_id)
     if not llm:
@@ -182,7 +334,10 @@ def completions():
     
     try:
         result = llm(prompt, max_tokens=max_tokens, temperature=temperature, stop=stop)
-        content = result['choices'][0]['text']
+        
+        # Limpar a saída
+        raw_content = result['choices'][0]['text']
+        content = clean_output(raw_content)
         
         elapsed_time = time.time() - start_time
         
