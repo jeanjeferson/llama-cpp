@@ -2,9 +2,6 @@ FROM python:3.10-slim
 
 # Definir variáveis de ambiente
 ENV DEBIAN_FRONTEND=noninteractive
-ENV LLAMA_CTX_SIZE=4096
-ENV LLAMA_N_THREADS=18
-ENV LLAMA_N_BATCH=512
 
 # Instalar dependências
 RUN apt-get update && apt-get install -y \
@@ -24,8 +21,8 @@ RUN pip install --upgrade pip && \
 WORKDIR /app
 RUN mkdir -p /app/models
 
-# Copiar o script do servidor
-COPY server.py /app/server.py
+# Copiar o script do servidor compatível com OpenAI
+COPY openai-compatible-server.py /app/server.py
 
 # Tornar o script executável
 RUN chmod +x /app/server.py
