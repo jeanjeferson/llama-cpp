@@ -382,4 +382,18 @@ if __name__ == "__main__":
     load_model(default_model)
     
     print("Servidor compatível com OpenAI iniciando...")
-    app.run(host="0.0.0.0", port=8080, debug=False)
+    
+    # Verifique se waitress está instalado, se não, use o servidor de desenvolvimento
+    try:
+        from waitress import serve
+        print("Usando servidor de produção Waitress...")
+        serve(app, host="0.0.0.0", port=8080, threads=8)
+    except ImportError:
+        try:
+            import gunicorn
+            print("AVISO: Para iniciar com Gunicorn, execute: gunicorn --bind 0.0.0.0:8080 --workers 1 --threads 4 server:app")
+            app.run(host="0.0.0.0", port=8080)
+        except ImportError:
+            print("AVISO: Executando com servidor de desenvolvimento Flask.")
+            print("AVISO: Instale waitress ou gunicorn para produção: pip install waitress")
+            app.run(host="0.0.0.0", port=8080)
