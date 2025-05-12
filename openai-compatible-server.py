@@ -147,6 +147,7 @@ def get_memory_usage():
     except:
         return {"error": "psutil não disponível"}
 
+# Função load_model modificada para suportar múltiplos modelos
 def load_model(model_id, force=False):
     """Carrega um modelo na memória."""
     # Verificar se o modelo já está carregado
@@ -185,11 +186,7 @@ def load_model(model_id, force=False):
             verbose=DEFAULT_CONFIG["verbose"]
         )
         
-        # Verificar se já existe um modelo carregado e descarregar
-        if len(loaded_models) > 0 and model_id not in loaded_models:
-            logger.info("Descarregando outros modelos para liberar memória")
-            loaded_models.clear()
-            gc.collect()
+        # REMOVIDA a lógica que descarregava outros modelos automáticamente
         
         loaded_models[model_id] = llm
         
@@ -287,6 +284,7 @@ def list_models():
         logger.error(f"Erro ao listar modelos: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
+# Endpoint de carregamento modificado para suporte a múltiplos modelos
 @app.route("/v1/models/load", methods=["POST"])
 def load_model_endpoint():
     """Carrega um modelo específico na memória (compatível com OpenAI)."""
@@ -306,12 +304,26 @@ def load_model_endpoint():
                 }
             }), 400
         
-        # Descarregar todos os outros modelos primeiro para liberar memória
-        if data.get("unload_others", True):
+        # ALTERADO: Agora o padrão é FALSE para permitir múltiplos modelos
+        if data.get("unload_others", False):  # Opção para descarregar outros modelos
             current_models = list(loaded_models.keys())
             for existing_model in current_models:
                 if existing_model != model_id:
                     unload_model(existing_model)
+        
+        # Verificar o uso atual de memória
+        current_memory = get_memory_usage()
+        try:
+            if current_memory.get("percent", 0) > 85:  # Limite de segurança
+                logger.warning(f"Uso de memória muito alto ({current_memory.get('percent')}%) para carregar novo modelo")
+                return jsonify({
+                    "warning": "Uso de memória muito alto",
+                    "memory": current_memory,
+                    "recommendation": "Descarregue alguns modelos antes de carregar este"
+                }), 400
+        except:
+            # Se não conseguir verificar memória, continua normalmente
+            pass
         
         # Tentar carregar o modelo
         model = load_model(model_id, force=force)
@@ -323,7 +335,8 @@ def load_model_endpoint():
                 "created": int(time.time()),
                 "model": model_id,
                 "success": True,
-                "memory": get_memory_usage()
+                "memory": get_memory_usage(),
+                "total_models_loaded": len(loaded_models)
             })
         else:
             return jsonify({
@@ -336,6 +349,41 @@ def load_model_endpoint():
             }), 404
     except Exception as e:
         logger.error(f"Erro ao carregar modelo: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+# Adicionar um novo endpoint para listar modelos carregados com mais detalhes
+@app.route("/v1/models/loaded", methods=["GET"])
+def loaded_models_endpoint():
+    """Lista todos os modelos atualmente carregados na memória."""
+    try:
+        model_details = []
+        total_memory = 0
+        
+        for model_id in loaded_models:
+            try:
+                # Estimativa de memória para cada modelo (aproximada)
+                model_size_mb = loaded_models[model_id].model_size() / (1024 * 1024)
+                total_memory += model_size_mb
+                
+                model_details.append({
+                    "id": model_id,
+                    "type": get_model_type(model_id),
+                    "estimated_size_mb": round(model_size_mb, 2)
+                })
+            except:
+                model_details.append({
+                    "id": model_id,
+                    "type": get_model_type(model_id)
+                })
+        
+        return jsonify({
+            "loaded_models": model_details,
+            "count": len(model_details),
+            "total_memory": get_memory_usage(),
+            "timestamp": datetime.now().isoformat()
+        })
+    except Exception as e:
+        logger.error(f"Erro ao listar modelos carregados: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 @app.route("/v1/models/unload", methods=["POST"])
@@ -613,6 +661,99 @@ def health():
     except Exception as e:
         logger.error(f"Erro no health check: {e}", exc_info=True)
         return jsonify({"status": "error", "error": str(e)}), 500
+
+@app.route('/<path:path>', methods=['GET', 'POST', 'PUT', 'DELETE'])
+def catch_all(path):
+    """Captura todas as rotas não definidas e retorna um erro 404 amigável."""
+    return jsonify({
+        "error": {
+            "message": f"Endpoint '/{path}' não encontrado",
+            "type": "not_found",
+            "code": "endpoint_not_found"
+        }
+    }), 404
+
+@app.route("/v1/models/info", methods=["GET"])
+def model_info():
+    """Retorna informações detalhadas sobre modelos carregados."""
+    model_details = []
+    
+    for model_id, model in loaded_models.items():
+        try:
+            ctx_size = model.n_ctx()
+            vocab_size = model.n_vocab()
+            model_details.append({
+                "id": model_id,
+                "n_ctx": ctx_size,
+                "n_vocab": vocab_size,
+                "loaded_at": int(time.time())  # Aproximado, ideal seria armazenar quando carregou
+            })
+        except:
+            model_details.append({
+                "id": model_id,
+                "details": "Não disponível"
+            })
+    
+    return jsonify({
+        "models": model_details,
+        "memory": get_memory_usage(),
+        "timestamp": datetime.now().isoformat()
+    })
+
+@app.route("/v1/models/test", methods=["POST"])
+def test_model():
+    """Testa um modelo com uma inferência rápida."""
+    data = request.json
+    model_id = data.get("model", "")
+    
+    if not model_id:
+        return jsonify({
+            "error": {
+                "message": "model é obrigatório",
+                "type": "invalid_request_error",
+                "param": "model"
+            }
+        }), 400
+    
+    # Verificar se modelo está carregado
+    if model_id not in loaded_models:
+        return jsonify({
+            "error": {
+                "message": f"Modelo '{model_id}' não está carregado",
+                "type": "invalid_request_error",
+                "param": "model"
+            }
+        }), 404
+    
+    try:
+        # Fazer uma inferência muito rápida para testar
+        start_time = time.time()
+        model_type = get_model_type(model_id)
+        test_prompt = format_prompt_for_model([{"role": "user", "content": "Olá"}], model_type)
+        
+        result = loaded_models[model_id](
+            test_prompt,
+            max_tokens=10,
+            temperature=0.7,
+            stop=["</s>"]
+        )
+        
+        elapsed_time = time.time() - start_time
+        
+        return jsonify({
+            "model": model_id,
+            "status": "ok",
+            "response_time": elapsed_time,
+            "sample_output": clean_output(result['choices'][0]['text']),
+            "memory": get_memory_usage()
+        })
+    except Exception as e:
+        return jsonify({
+            "error": {
+                "message": f"Erro ao testar modelo: {str(e)}",
+                "type": "server_error"
+            }
+        }), 500
 
 # Handler para SIGTERM e SIGINT
 def signal_handler(sig, frame):
