@@ -15,7 +15,7 @@ RUN apt-get update && apt-get install -y \
 # Instalar llama-cpp-python com otimizações para CPU
 ENV CMAKE_ARGS="-DLLAMA_AVX2=ON -DLLAMA_FMA=ON -DLLAMA_F16C=ON"
 RUN pip install --upgrade pip && \
-    pip install llama-cpp-python flask flask_cors numpy python-dotenv waitress gunicorn
+    pip install llama-cpp-python flask flask_cors numpy python-dotenv waitress gunicorn psutil
 
 # Criar estrutura de diretórios
 WORKDIR /app

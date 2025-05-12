@@ -412,7 +412,7 @@ def chat_completions():
         data = request.json
         model_id = data.get("model", default_model)
         
-        # Verificar se o model_id foi fornecido
+        # Verificar se o model_id foi fornecido ou é válido
         if not model_id:
             return jsonify({
                 "error": {
@@ -523,7 +523,7 @@ def completions():
         data = request.json
         model_id = data.get("model", default_model)
         
-        # Verificar se o model_id foi fornecido
+        # Verificar se o model_id foi fornecido ou é válido
         if not model_id:
             return jsonify({
                 "error": {
@@ -628,12 +628,14 @@ signal.signal(signal.SIGINT, signal_handler)
 
 if __name__ == "__main__":
     try:
-        # Não carregar modelo padrão na inicialização para economizar memória
+        logger.info("Servidor compatível com OpenAI iniciando...")
+        
+        # Carregar modelo padrão SOMENTE se estiver definido
         if default_model:
             logger.info(f"Carregando modelo padrão: {default_model}")
             load_model(default_model)
-        
-        logger.info("Servidor compatível com OpenAI iniciando...")
+        else:
+            logger.info("Nenhum modelo padrão definido, inicie sem carregar modelos")
         
         # Verifique se waitress está instalado, se não, use o servidor de desenvolvimento
         try:
